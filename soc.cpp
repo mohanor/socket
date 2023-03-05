@@ -19,7 +19,7 @@ int main()
 {
     
     char buffer[1024] = { 0 };
-    const char* response = "HTTP/1.1 200 Ok\r\nServer: nginx/1.21.5\r\nDate: Sat, 04 Mar 2023 02:44:26 GMT\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 51\r\nLast-Modified: Tue, 28 Feb 2023 21:07:43 GMT\r\nConnection: keep-alive\r\nKeep-Alive: timeout=15\r\nAccept-Ranges: bytes\r\n\r\n";
+    const char* response = "HTTP/1.1 200 Ok\r\nServer: nginx/1.21.5\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 15\r\n\r\n\r\nhello world!!";
     int counter = 0;
     int nfds = 1, current_size = 0;
 
@@ -27,8 +27,8 @@ int main()
     struct sockaddr_in srv;
     int addrlen = sizeof(srv);
 
-    int fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (fd < 0)
+    int listener = socket(AF_INET, SOCK_STREAM, 0);
+    if (listener < 0)
     {
         cout << "the socket not opened" << '\n';
         return 1;
@@ -45,54 +45,67 @@ int main()
     /* Allow socket descriptor to be reuseable                   */
     /*************************************************************/
 
-    if (setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+    if (setsockopt(listener, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
     {
         cout << "setsockopt failed" << '\n';
-        close(fd), exit(EXIT_FAILURE);
+        close(listener), exit(EXIT_FAILURE);
     }
 
-    if (bind(fd, (struct sockaddr *)&srv, addrlen) < 0)
+    if (bind(listener, (struct sockaddr *)&srv, addrlen) < 0)
     {
         cout << "bind failed" << '\n';
-        close(fd), exit(EXIT_FAILURE);
+        close(listener), exit(EXIT_FAILURE);
     }
 
-    int nRet = listen(fd, 5);
+    int nRet = listen(listener, 5);
     if (nRet < 0)
     {
         cout << "fail to listen to local port" << '\n';
-        close(fd), exit(EXIT_FAILURE);
+        close(listener), exit(EXIT_FAILURE);
     }
 
 
-    struct pollfd fds[200];
+    struct pollfd fds[20];
     
     /*************************************************************/
     /* Initialize the pollfd structure                           */
     /*************************************************************/
     memset(fds, 0, sizeof(fds));
     
-    fds[0].fd = fd;
+
+    for(int i = 0; i < 20; i++)
+        fds[i].fd = -1;
+    
+    fds[0].fd = listener;
     fds[0].events = POLLIN;
 
     int rc;
-    int new_ds;
+    int new_client;
 
 	while (true)
     {
 
-        printf("Waiting ...\n");
+        cout << endl << "waiting ..." << endl;
+
+        /*********************************************************************/
+        /* return the number of fds that are ready for reading               */
+        /* (stop scanning after i find that many)                            */
+        /* deleting items from the set => set any fd field to a negative num */
+        /* ber and poll() will ignore it                                     */
+        /*********************************************************************/
+    
         rc = poll(fds, nfds, -1);
+        cout << "poll return " <<  rc << endl;
+        
         if (rc < 0)
         {
             perror("poll() failed");
             break;
         }
 
-        
         if (rc == 0)
         {
-            printf("poll() timed out.  End program.\n");
+            printf("poll() End program.\n");
             break;
         }
 
@@ -105,82 +118,62 @@ int main()
             
             if (fds[i].revents != POLLIN)
             {
-                printf("Error! revents = %d\n", fds[i].revents);
+                cerr << "Error! revents = " << fds[i].revents << endl;
                 close(fds[i].fd);
+                fds[i].fd = -1;
                 break;
             }
 
-            if (fds[i].fd == fd)
+            if (fds[i].fd == listener)
             {
-                //do {
-                    new_ds = accept(fd, (struct sockaddr*)&srv , (socklen_t*)&addrlen);
 
-                    if (new_ds < 0)
-                    {
-                        cout << "fail to accept connection" << '\n';
-                        return 1;
-                    }
+                new_client = accept(listener, (struct sockaddr*)&srv , (socklen_t*)&addrlen);
 
-                    fds[nfds].fd = new_ds;
-                    fds[nfds].events = POLLIN;
-                    nfds++;
+                if (new_client < 0)
+                {
+                    cerr << "fail to accept connection" << '\n';
+                    return 1;
+                }
 
-                    printf("New incoming connection  %d\n", new_ds);
+                fds[nfds].fd = new_client;
+                fds[nfds].events = POLLIN;
+                nfds++;
 
-                //} while (new_ds != -1);
+                cout << "New incoming connection " << new_client << endl;
+
             }
             else
             {
-                printf("Descriptor %d is readable\n", fds[i].fd);
 
-                do
+                cout << "Descriptor " << fds[i].fd << " is readable" << endl;
+
+                rc = recv(fds[i].fd, buffer, sizeof(buffer), 0);
+                if (rc < 0)
                 {
-                    rc = recv(fds[i].fd, buffer, sizeof(buffer), 0);
+                    perror("recv() failed"), close(fds[i].fd);
+                    break;
+                }
 
-                    if (rc < 0)
-                    {
-                        perror("recv() failed");
-                        close(fds[i].fd);
-                        break;
-                    }
+                if (rc == 0)
+                {
+                    cout << "Connection closed" << endl;
+                    close(fds[i].fd);
+                    break;
+                }
 
-                    if (rc == 0)
-                    {
-                        printf("Connection closed\n");
-                        close(fds[i].fd);
-                        break;
-                    }
+                cout << rc << " bytes received" << endl; // << buffer << endl;
 
-                    int len = rc;
-                    printf("%d bytes received\n", len);
+                rc = send(fds[i].fd, response, strlen(response), 0);
+                if (rc < 0)
+                {
+                    perror("send() failed");
+                    break;
+                }
 
-                    rc = send(fds[i].fd, "hello world!!", strlen("hello world!!"), 0);
-                    if (rc < 0)
-                    {
-                        perror("send() failed");
-                        break;
-                    }
-
-                } while (true);
             }
 
         }
 
-        // int clientSocket = accept(fd, (struct sockaddr*)&srv , (socklen_t*)&addrlen);
-        // if (clientSocket < 0)
-        // {
-        //     cout << "fail to accept connection" << '\n';
-        //     return 1;
-        // }
-        
-        // cout << "clientSocket " << clientSocket << '\n';
-        // int valrecv = recv(clientSocket, buffer, 1024, 0);
-        // send(clientSocket, response, strlen(response), 0);
-
-        // send(clientSocket, "Hello, World!!", strlen("Hello, World!!"), 0);
-
-        // close(clientSocket);
-        
     }
 
     return 0;
