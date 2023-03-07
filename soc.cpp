@@ -7,21 +7,114 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <poll.h>
+# include <poll.h>
+# include <iostream>
+# include <fstream>
+#include <sstream>
+
+#include <sys/stat.h>
 
 using namespace std;
 
 #define PORT 8080
 
+std::string getFileContent(std::string file_name)
+{
+    std::string content, line;
+    std::ifstream MyReadFile(file_name);
+
+    if (!MyReadFile.is_open())
+        return "";
+
+    while (getline (MyReadFile, line))
+        content += line + '\n';
+
+    MyReadFile.close();
+    return content.substr(0, content.size() - 1);
+}
+
+size_t getFileSize(std::string filename) { return getFileContent(filename).size(); }
+
+int sendFileInPackets(std::string file, struct pollfd *fds, int i)
+{
+    std::stringstream response;
+    
+    response << "HTTP/1.1 200 Ok\r\n";
+    response << "Server: nginx/1.21.5\r\n";
+    response << "Content-Type: text/html\r\n";
+    response << "charset=utf-8\r\n";
+    response << "Content-Length: " + std::to_string(getFileSize(file)) + "\r\n\r\n";
+
+    if (getFileContent(file).size() > 1024)
+    {
+        send(fds[i].fd, response.str().c_str(), response.str().size(), 0);
+
+        char buffer[1023] = { 0 };
+
+        ifstream responsedFile(file.c_str(), ios::binary);
+
+        while (responsedFile.read(buffer, 1024))
+        {
+            send(fds[i].fd, buffer, 1024, 0);
+            std::cout << "buffer: " << buffer << std::endl;
+            memset(buffer, 0, 1024);
+        }
+
+        int bytesRemaining = responsedFile.gcount();
+        if (bytesRemaining > 0) {
+            responsedFile.read(buffer, bytesRemaining);
+            send(fds[i].fd, buffer, bytesRemaining, 0);
+        }
+
+        return 0;
+    }
+
+    response << getFileContent(file);
+    send(fds[i].fd, response.str().c_str(), response.str().size(), 0);
+
+    return 0;
+}
+
+int communicate(struct pollfd *fds, int i)
+{
+    int size;
+    char buffer[1024] = { 0 };
+
+    cout << "Descriptor " << fds[i].fd << " is readable" << endl;
+
+    size = recv(fds[i].fd, buffer, sizeof(buffer), 0);
+    if (size < 0)
+    {
+        cout << "recv failed" << endl; close(fds[i].fd);
+        return false;
+    }
+
+    if (not size)
+    {
+        cout << "Connection closed" << endl;
+        close(fds[i].fd);
+        return false;
+    }
+
+    cout << size << " bytes received" << endl;
+    std::string file = "index.html";
+
+    sendFileInPackets(file, fds, i);
+
+    return true;
+}
 
 
 int main()
 {
     
     char buffer[1024] = { 0 };
-    const char* response = "HTTP/1.1 200 Ok\r\nServer: nginx/1.21.5\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: 15\r\n\r\n\r\nhello world!!";
     int counter = 0;
     int nfds = 1, current_size = 0;
+
+
+
+    // std::cout << file << std::endl;
 
 
     struct sockaddr_in srv;
@@ -105,7 +198,7 @@ int main()
 
         if (rc == 0)
         {
-            printf("poll() End program.\n");
+            cerr << "poll End program." << endl;
             break;
         }
 
@@ -124,11 +217,11 @@ int main()
                 break;
             }
 
+            // acceptConnection
             if (fds[i].fd == listener)
             {
-
+                
                 new_client = accept(listener, (struct sockaddr*)&srv , (socklen_t*)&addrlen);
-
                 if (new_client < 0)
                 {
                     cerr << "fail to accept connection" << '\n';
@@ -142,35 +235,8 @@ int main()
                 cout << "New incoming connection " << new_client << endl;
 
             }
-            else
-            {
-
-                cout << "Descriptor " << fds[i].fd << " is readable" << endl;
-
-                rc = recv(fds[i].fd, buffer, sizeof(buffer), 0);
-                if (rc < 0)
-                {
-                    perror("recv() failed"), close(fds[i].fd);
-                    break;
-                }
-
-                if (rc == 0)
-                {
-                    cout << "Connection closed" << endl;
-                    close(fds[i].fd);
-                    break;
-                }
-
-                cout << rc << " bytes received" << endl; // << buffer << endl;
-
-                rc = send(fds[i].fd, response, strlen(response), 0);
-                if (rc < 0)
-                {
-                    perror("send() failed");
-                    break;
-                }
-
-            }
+            else if ( !communicate(fds, i) )
+                break;
 
         }
 
